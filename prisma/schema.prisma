@@ -1,0 +1,171 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Profile {
+  id           String        @id @default(uuid())
+  name         String
+  bio          String
+  avatar       String        // Avatar name/url or text description
+  gender       String        // Male, Female, Non-binary, etc.
+  lookingFor   String        // Male, Female, Everyone, etc.
+  isActive     Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  interactions Interaction[]
+  userReviews  UserReview[]
+}
+
+model Character {
+  id             String        @id // ID matches filename in AIC personas, e.g., 'emma'
+  name           String
+  avatar         String        // URL or path
+  publicBio      String
+  privatePersona String
+  voiceId        String
+  gender         String        // Female
+  lookingFor     String        // Male, Female, Everyone, etc.
+  tags           String?       // JSON dictionary of self-reported tag scores 1-10
+  disabled       Boolean       @default(false)
+  outdated       Boolean       @default(false) // Added for Feature #2
+  delayChance    Float         @default(0.02) // Chance that AIC delays/ignores reply (e.g. 0.005 to 0.05)
+  userFollowUpResponseChance Float @default(0.5) // Added for Feature #6 (response chance to user follow-up)
+  maxConsecutiveMessages Int   @default(3)    // Maximum messages to send in a row without a user reply
+  asyncMessageWeight     Int   @default(3)    // How likely (1-5) they are to send background messages
+  deleted        Boolean       @default(false) // Safe permanent deletion (chat logs remain intact)
+  developedTags  String?       // Comma-separated list or JSON array of traits actively used to develop persona
+  imageGenPrompt String?       // LLM-written visual description used by AI image generation (Image Prompt Writer)
+  starterSet     String?       // Starter-suite marker ("male" | "female"); synced from the persona JSON so the first-time setup can disable non-selected starter sets
+  createdAt      DateTime      @default(now())
+  interactions   Interaction[]
+  aicInteractionsA AicInteraction[] @relation("AicSideA")
+  aicInteractionsB AicInteraction[] @relation("AicSideB")
+  callMetric       AicCallMetric?
+  userReviews      UserReview[]
+}
+
+model Interaction {
+  id                String    @id @default(uuid())
+  profileId         String
+  characterId       String
+  userStatus        String?   // "pass", "like", or null
+  aicStatus         String?   // "pass", "like", "slide-in", or null
+  dmMessage         String?   // opening line if slide-in
+  internalReasoning String?   // AIC's reasoning from evaluation
+  matched           Boolean   @default(false)
+  matchTimestamp    DateTime?
+  unreadCount       Int       @default(0) // Number of unread messages in this chat
+  pendingMatchAt    DateTime? // Scheduled materialization time for delayed mutual matches (Match Delay feature; null = none)
+  unmatched         Boolean   @default(false) // Whether interaction is unmatched
+  unmatchedBy       String?   // Who unmatched: "user" or "assistant"
+  updatedAt         DateTime  @updatedAt
+
+  profile           Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  character         Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  messages          Message[]
+  userReviews       UserReview[]
+
+  @@unique([profileId, characterId])
+}
+
+model Message {
+  id            String      @id @default(uuid())
+  interactionId String
+  role          String      // "user" or "assistant"
+  content       String
+  createdAt     DateTime    @default(now())
+
+  interaction   Interaction @relation(fields: [interactionId], references: [id], onDelete: Cascade)
+}
+
+model Portrait {
+  id          String   @id @default(uuid())
+  filepath    String   @unique
+  tags        String   // JSON object of predefined tags/values (e.g. {"gender": "female", "hair_color": "brunette"})
+  customTags  String   // JSON array of 10 additional tags applied by AI
+  description String   // Concise 3-sentence plain description (can include NSFW)
+  in_use      Boolean  @default(false)
+  processed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+model SystemSetting {
+  key   String @id
+  value String
+}
+
+model AicInteraction {
+  id           String        @id @default(uuid())
+  characterAId String
+  characterBId String
+  statusA      String?       // "pass", "like", "slide-in", or null
+  statusB      String?       // "pass", "like", "slide-in", or null
+  matched      Boolean       @default(false)
+  disabled     Boolean       @default(false) // Freeze without deleting
+  unmatched    Boolean       @default(false) // Whether interaction is unmatched
+  unmatchedBy  String?       // Character ID or "admin" who unmatched
+  summary      String?       // LLM-generated relationship summary
+  reasoningA   String?       // Character A's internal thoughts
+  reasoningB   String?       // Character B's internal thoughts
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  characterA   Character     @relation("AicSideA", fields: [characterAId], references: [id], onDelete: Cascade)
+  characterB   Character     @relation("AicSideB", fields: [characterBId], references: [id], onDelete: Cascade)
+  messages     AicMessage[]
+
+  @@unique([characterAId, characterBId])
+}
+
+model AicMessage {
+  id               String         @id @default(uuid())
+  aicInteractionId String
+  senderId         String         // Character ID of the sender
+  content          String
+  createdAt        DateTime       @default(now())
+
+  interaction      AicInteraction @relation(fields: [aicInteractionId], references: [id], onDelete: Cascade)
+}
+
+model AicCallMetric {
+  id            String    @id @default(uuid())
+  characterId   String    @unique
+  userChatCalls Int       @default(0)
+  aicChatCalls  Int       @default(0)
+  evalCalls     Int       @default(0)
+  summaryCalls  Int       @default(0)
+  totalCalls    Int       @default(0)
+  lastCallAt    DateTime?
+
+  character     Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+}
+
+model UserReview {
+  id              String       @id @default(uuid())
+  profileId       String
+  characterId     String
+  interactionId   String?
+  content         String
+  sentiment       String       // "green_flag", "red_flag", "tea_spill", "kink_friendly", "neutral", "wholesome"
+  rating          Int          @default(3) // 1 to 5 stars
+  badges          String       // JSON string array of badges e.g. ["Great Banter", "Dry Texter"]
+  isAnonymous     Boolean      @default(true)
+  anonymousAlias  String?
+  triggerReason   String       // "milestone_40_msgs", "milestone_100_msgs", "unmatch_user", "unmatch_aic", "slide_in_ignored", "slide_in_accepted", "manual"
+  upvotes         Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  profile         Profile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  character       Character    @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  interaction     Interaction? @relation(fields: [interactionId], references: [id], onDelete: SetNull)
+
+  @@index([profileId])
+  @@index([characterId])
+}
+
+
